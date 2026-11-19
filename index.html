@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>捏捏工坊 · 把照片捏成会回弹的软糖</title>
+    <meta
+      name="description"
+      content="在照片上涂出想捏的区域，切到捏一捏，按住拖一拖，松手会自己弹回来。四档手感、四秒录成 GIF，全程在浏览器本地完成。"
+    />
+    <meta name="theme-color" content="#E9F6FE" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://hruiccc.github.io/RuiC-SquishLab/" />
+    <meta property="og:title" content="捏捏工坊 · 把照片捏成会回弹的软糖" />
+    <meta
+      property="og:description"
+      content="在照片上涂出想捏的区域，切到捏一捏，按住拖一拖，松手会自己弹回来。四秒录成 GIF，全程在浏览器本地完成。"
+    />
+    <meta property="og:image" content="https://hruiccc.github.io/RuiC-SquishLab/docs/preview.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="assets/fonts/gabarito-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <svg class="sprite" aria-hidden="true" width="0" height="0" focusable="false">
+      <symbol id="i-lock" viewBox="0 0 24 24">
+        <rect x="5" y="11" width="14" height="10" rx="2.5" />
+        <path d="M8.5 11V7.5a3.5 3.5 0 0 1 7 0V11" />
+      </symbol>
+      <symbol id="i-volume" viewBox="0 0 24 24">
+        <path d="M4 10v4a1 1 0 0 0 1 1h3l4 3.5V6.5L8 10H5a1 1 0 0 0-1 0Z" />
+        <path d="M15.5 9a4.5 4.5 0 0 1 0 6" />
+        <path d="M18 6.5a8 8 0 0 1 0 11" />
+      </symbol>
+      <symbol id="i-volume-off" viewBox="0 0 24 24">
+        <path d="M4 10v4a1 1 0 0 0 1 1h3l4 3.5V6.5L8 10H5a1 1 0 0 0-1 0Z" />
+        <path d="M16 10l4 4M20 10l-4 4" />
+      </symbol>
+      <symbol id="i-help" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M9.6 9.4A2.5 2.5 0 0 1 14.5 10c0 1.7-2.5 1.9-2.5 3.6" />
+        <path d="M12 17h.01" />
+      </symbol>
+      <symbol id="i-image" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2.5" />
+        <circle cx="8.6" cy="9.4" r="1.4" />
+        <path d="M21 15.5 16.2 11 6 20" />
+      </symbol>
+      <symbol id="i-download" viewBox="0 0 24 24">
+        <path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16" />
+        <path d="M7.5 11 12 15.5 16.5 11" />
+        <path d="M12 4v11" />
+      </symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24">
+        <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+        <path d="M20 4.5V9h-4.5" />
+      </symbol>
+      <symbol id="i-close" viewBox="0 0 24 24">
+        <path d="M6 6l12 12M18 6 6 18" />
+      </symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24">
+        <path d="M9 6l6 6-6 6" />
+      </symbol>
+      <symbol id="i-arrows" viewBox="0 0 24 24">
+        <path d="M4 12h16" />
+        <path d="M8 8l-4 4 4 4" />
+        <path d="M16 8l4 4-4 4" />
+      </symbol>
+      <symbol id="i-brush" viewBox="0 0 24 24">
+        <path d="M3 21v-4a4 4 0 1 1 4 4H3Z" />
+        <path d="M21 3a16 16 0 0 0-12.8 10.2" />
+        <path d="M21 3a16 16 0 0 1-10.2 12.8" />
+        <path d="M10.6 9a9 9 0 0 1 4.4 4.4" />
+      </symbol>
+      <symbol id="i-eraser" viewBox="0 0 24 24">
+        <path d="M19 20H8.5l-4.2-4.3a2.1 2.1 0 0 1 0-3l9-9a2.1 2.1 0 0 1 3 0l4.2 4.2a2.1 2.1 0 0 1 0 3L12.5 19" />
+        <path d="M15 15 9 9" />
+      </symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24">
+        <path d="M9 14 4 9l5-5" />
+        <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+      </symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24">
+        <path d="M4 7h16" />
+        <path d="M10 11v6M14 11v6" />
+        <path d="M5 7l1 13h12l1-13" />
+        <path d="M9 7V4h6v3" />
+      </symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24">
+        <path d="M12 3.5 13.7 9l5.5 1.7-5.5 1.7L12 18l-1.7-5.6L4.8 10.7 10.3 9 12 3.5Z" />
+      </symbol>
+      <symbol id="i-github" viewBox="0 0 24 24">
+        <path
+          d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.3-3.2-.1-.3-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.2 2.9.1 3.2.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3Z"
+        />
+      </symbol>
+    </svg>
+
+    <div class="app">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="捏捏工坊首页">
+          <span class="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32">
+              <path
+                d="M16 3.4c7.1 0 11.9 4.5 11.9 11.7 0 8-4.9 13.4-11.9 13.4S4.1 23.1 4.1 15.1C4.1 7.9 8.9 3.4 16 3.4Z"
+                fill="currentColor"
+              />
+              <circle cx="9.6" cy="17.8" r="2.6" fill="#FFB3C4" opacity="0.9" />
+              <circle cx="22.4" cy="17.8" r="2.6" fill="#FFB3C4" opacity="0.9" />
+              <circle cx="11.7" cy="14.6" r="1.6" fill="#0B2F44" />
+              <circle cx="20.3" cy="14.6" r="1.6" fill="#0B2F44" />
+              <path
+                d="M13.2 19.4c1.7 1.5 3.9 1.5 5.6 0"
+                fill="none"
+                stroke="#0B2F44"
+                stroke-width="1.7"
+                stroke-linecap="round"
+              />
+            </svg>
+          </span>
+          <span class="brand__name">
+            <strong>捏捏工坊</strong>
+            <small>SQUISH LAB</small>
+          </span>
+        </a>
+
+        <div class="topbar__actions">
+          <span class="privacy" title="照片只在你的浏览器里处理，不会上传">
+            <svg class="icon" aria-hidden="true"><use href="#i-lock" /></svg>
+            <span>本地处理</span>
+          </span>
+          <button class="icon-btn" id="soundBtn" type="button" aria-label="关闭音效" aria-pressed="true" title="音效">
+            <svg class="icon icon--on" aria-hidden="true"><use href="#i-volume" /></svg>
+            <svg class="icon icon--off" aria-hidden="true"><use href="#i-volume-off" /></svg>
+          </button>
+          <button class="icon-btn" id="helpBtn" type="button" aria-label="玩法与快捷键" title="玩法">
+            <svg class="icon" aria-hidden="true"><use href="#i-help" /></svg>
+          </button>
+          <a
+            class="icon-btn"
+            href="https://github.com/HRuiCcc/RuiC-SquishLab"
+            target="_blank"
+            rel="noopener"
+            aria-label="GitHub 开源仓库"
+            title="GitHub"
+          >
+            <svg class="icon icon--fill" aria-hidden="true"><use href="#i-github" /></svg>
+          </a>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="stage-col" aria-label="捏捏台">
+          <div class="stage-head">
+            <div class="stage-head__copy">
+              <h1>照片太硬？捏软它。</h1>
+              <p>先在照片上涂出想捏的地方，再按住拖一拖。四秒录成 GIF，发给朋友。</p>
+            </div>
+            <button class="btn btn--sky" id="uploadBtn" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-image" /></svg>
+              选一张照片
+            </button>
+          </div>
+
+          <div class="stage-bar">
+            <div class="tabs" role="tablist" aria-label="涂还是一捏">
+              <button class="tab" id="paintTab" type="button" role="tab" aria-selected="false">
+                涂一涂
+              </button>
+              <button class="tab" id="playTab" type="button" role="tab" aria-selected="true">
+                捏一捏
+              </button>
+            </div>
+            <div class="brushbar" id="brushbar" hidden>
+              <span class="brushbar__size">
+                <svg class="icon" aria-hidden="true"><use href="#i-brush" /></svg>
+                <input id="brushSize" type="range" min="18" max="150" step="2" value="64" aria-label="笔刷大小" />
+              </span>
+              <button class="tool tool--text" id="softBtn" type="button" aria-pressed="true" title="切换柔边 / 硬边">
+                柔边
+              </button>
+              <button class="tool" id="eraserBtn" type="button" aria-pressed="false" title="橡皮">
+                <svg class="icon" aria-hidden="true"><use href="#i-eraser" /></svg>
+              </button>
+              <button class="tool" id="undoBtn" type="button" title="撤销" disabled>
+                <svg class="icon" aria-hidden="true"><use href="#i-undo" /></svg>
+              </button>
+              <button class="tool" id="clearBtn" type="button" title="清空">
+                <svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg>
+              </button>
+            </div>
+            <div class="stage-bar__side">
+              <span class="mode-note" id="modeNote">按住照片拖动，松手回弹</span>
+              <button class="btn btn--sky btn--go" id="goPlay" type="button" hidden>
+                涂好了，去捏
+              </button>
+            </div>
+          </div>
+
+          <div
+            class="stage"
+            id="stage"
+            tabindex="0"
+            aria-label="可以揉捏的照片。涂过的区域才捏得动，空格键戳一下。"
+          >
+            <canvas id="gl"></canvas>
+            <canvas id="maskView" aria-hidden="true"></canvas>
+            <div class="brush-cursor" id="brushCursor" hidden></div>
+
+            <div class="stage__tag">
+              <span class="tag-dot" aria-hidden="true"></span>
+              <span id="tagText">样品 01 · 麻薯猫</span>
+            </div>
+
+            <div class="stage__rec" id="recBadge" hidden>
+              <span class="rec-dot" aria-hidden="true"></span>
+              <span id="recClock">0:00</span>
+            </div>
+
+            <div class="stage__hint" id="stageHint">
+              <svg class="icon" aria-hidden="true"><use href="#i-arrows" /></svg>
+              按住涂过的地方，拖一拖
+            </div>
+
+            <div class="stage__encoding" id="encoding" hidden>
+              <span class="spinner" aria-hidden="true"></span>
+              <span>正在压成 GIF <b id="encodePct">0%</b></span>
+            </div>
+
+            <div class="stage__progress" id="recProgress" hidden><i></i></div>
+            <div class="stage__drop" id="dropOverlay" hidden>松手就换这张</div>
+          </div>
+
+          <div class="stage-foot">
+            <p class="keys">
+              <kbd>空格</kbd> 戳一下 <span aria-hidden="true">·</span> <kbd>R</kbd> 复位
+              <span aria-hidden="true">·</span> <kbd>G</kbd> 录制
+            </p>
+            <p class="meta" id="meta">900 × 900 · 网格 0 × 0</p>
+          </div>
+        </section>
+
+        <aside class="rail" aria-label="手感与导出">
+          <section class="rail-block">
+            <div class="rail-head">
+              <h2>手感</h2>
+              <span class="rail-value" id="feelValue">麻薯</span>
+            </div>
+            <div class="feels" role="radiogroup" aria-label="选择手感">
+              <button class="feel" type="button" role="radio" aria-checked="true" data-preset="mochi">
+                <span class="feel__wave" aria-hidden="true">
+                  <svg viewBox="0 0 40 24"><path d="M2 15c5-7 9-7 13 0s8 7 13 0 6-5 10-2" /></svg>
+                </span>
+                <span class="feel__text"><b>麻薯</b><i>慢慢回弹</i></span>
+              </button>
+              <button class="feel" type="button" role="radio" aria-checked="false" data-preset="jelly">
+                <span class="feel__wave" aria-hidden="true">
+                  <svg viewBox="0 0 40 24"><path d="M2 13c4-6 7 6 11 0s7-6 11 0 7 6 11 0 3-3 3-3" /></svg>
+                </span>
+                <span class="feel__text"><b>果冻</b><i>抖得厉害</i></span>
+              </button>
+              <button class="feel" type="button" role="radio" aria-checked="false" data-preset="mallow">
+                <span class="feel__wave" aria-hidden="true">
+                  <svg viewBox="0 0 40 24"><path d="M2 14c6-9 12-9 18 0s13 8 18 2" /></svg>
+                </span>
+                <span class="feel__text"><b>棉花糖</b><i>轻、很软</i></span>
+              </button>
+              <button class="feel" type="button" role="radio" aria-checked="false" data-preset="rubber">
+                <span class="feel__wave" aria-hidden="true">
+                  <svg viewBox="0 0 40 24"><path d="M2 16 8 8l5 8 5-8 5 8 5-8 5 8 5-8" /></svg>
+                </span>
+                <span class="feel__text"><b>橡皮</b><i>紧、弹得快</i></span>
+              </button>
+            </div>
+
+            <label class="range" for="power">
+              <span class="range__top"><span>力度</span><output id="powerOut" for="power">1.0×</output></span>
+              <input id="power" type="range" min="0.4" max="1.6" step="0.05" value="1" />
+            </label>
+          </section>
+
+          <section class="rail-block">
+            <div class="rail-head">
+              <h2>录一段</h2>
+              <span class="rail-value" id="recHint">4 秒</span>
+            </div>
+
+            <button class="rec-btn" id="recBtn" type="button">
+              <span class="rec-btn__ico" aria-hidden="true"></span>
+              <span class="rec-btn__copy">
+                <b id="recLabel">开始录制 GIF</b>
+                <i id="recSub">先涂一块，再来录</i>
+              </span>
+            </button>
+
+            <div class="take" id="take" hidden>
+              <img id="takeImg" alt="刚录好的 GIF 预览" />
+              <div class="take__meta">
+                <b>录好了</b>
+                <span id="takeInfo">440 × 440 · 1.0 MB</span>
+              </div>
+              <a class="btn btn--small" id="saveGif" href="#" download="squish.gif">
+                <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>
+                保存
+              </a>
+            </div>
+
+            <p class="rail-note">声音只在你这边。GIF 直接写进下载文件夹，不经过服务器。</p>
+          </section>
+
+          <section class="rail-block">
+            <div class="rail-head"><h2>存下来</h2></div>
+            <div class="rail-row">
+              <button class="btn btn--ghost" id="pngBtn" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>
+                透明 PNG
+              </button>
+              <button class="btn btn--ghost" id="resetBtn" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                复位
+              </button>
+            </div>
+            <p class="rail-note">PNG 是透明底，可以直接贴进聊天框当表情。</p>
+          </section>
+
+          <p class="rail-tip">
+            <svg class="icon" aria-hidden="true"><use href="#i-sparkle" /></svg>
+            涂得越大，回弹越夸张。腮帮子、肚子、枕头都很好捏。
+          </p>
+
+          <div class="rail-foot">
+            <span>全程在你的浏览器里完成</span>
+            <a href="https://github.com/HRuiCcc/RuiC-SquishLab" target="_blank" rel="noopener">
+              开源仓库
+              <svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg>
+            </a>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <dialog class="dialog" id="help">
+      <div class="dialog__head">
+        <h2>怎么玩</h2>
+        <button class="icon-btn" type="button" data-close aria-label="关闭">
+          <svg class="icon" aria-hidden="true"><use href="#i-close" /></svg>
+        </button>
+      </div>
+      <ol class="howto">
+        <li><b>选一张</b><span>人像、宠物、表情包都行。JPG、PNG、WebP 都收，动图取第一帧。</span></li>
+        <li><b>涂一块</b><span>用笔刷涂出想捏的地方，比如腮帮子、肚子、枕头。没涂到的地方不会动。笔刷大小、软硬、橡皮和撤销都在画布上方。</span></li>
+        <li><b>捏它，再录</b><span>切到「捏一捏」，按住涂过的地方拖，松手回弹，点一下是戳。四档手感，录四秒就是 GIF。</span></li>
+      </ol>
+      <dl class="facts">
+        <div><dt>快捷键</dt><dd>B 涂一涂 · 空格 戳一下 · R 复位 · G 录制 · P 存 PNG</dd></div>
+        <div><dt>隐私</dt><dd>照片不会上传。网格计算和 GIF 编码都在这个页面里跑。</dd></div>
+        <div><dt>技术</dt><dd>只有涂过的顶点会参与弹簧计算，其余全部钉住不动。WebGL 贴图，GIF 在本地编码。</dd></div>
+      </dl>
+      <p class="dialog__foot">
+        用 MIT 协议开源 ·
+        <a href="https://github.com/HRuiCcc/RuiC-SquishLab" target="_blank" rel="noopener">github.com/HRuiCcc/RuiC-SquishLab</a>
+      </p>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <input id="file" type="file" accept="image/*" hidden />
+
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
