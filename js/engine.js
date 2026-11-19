@@ -1,156 +1,234 @@
-// 一张照片 = 一张弹簧网格。
-// 顶点被拽走、邻居互相拉扯、松手后自己弹回来，全部跑在 CPU 上，
-// 再交给 WebGL 把纹理贴到变形后的网格上。
+// 软糯引擎：照片切成三角网格，顶点在着色器里被「拉 + 鼓」，
+// 松手后由阻尼弹簧回弹。形变只发生在遮罩权重高的顶点上。
+// 参数取自对原站（もちほっぺ・メーカー）的逆向：falloff / ring / lmax / 弹簧。
+
+const MAX_GRABS = 8;
+const SHORT_SEGS = 128;
+const MAX_SEGS = 192;
+const SUBSTEP = 1 / 240;
+const MAX_DT = 1 / 30;
+const EASE_MS = 60;
 
 export const PRESETS = {
-  mochi: { k: 0.15, damp: 0.9, spread: 0.16, radius: 0.26, pull: 1, kick: 7.5 },
-  jelly: { k: 0.36, damp: 0.83, spread: 0.2, radius: 0.21, pull: 1, kick: 9 },
-  mallow: { k: 0.09, damp: 0.935, spread: 0.11, radius: 0.32, pull: 1, kick: 6 },
-  rubber: { k: 0.55, damp: 0.79, spread: 0.17, radius: 0.17, pull: 1, kick: 10 },
+  mochi: { radius: 0.22, stretch: 0.55, freq: 9, zeta: 0.19, bulge: 0.1 },
+  jelly: { radius: 0.2, stretch: 0.68, freq: 11.5, zeta: 0.08, bulge: 0.16 },
+  mallow: { radius: 0.27, stretch: 0.46, freq: 6.5, zeta: 0.12, bulge: 0.08 },
+  rubber: { radius: 0.16, stretch: 0.72, freq: 13, zeta: 0.3, bulge: 0.18 },
 };
 
-const VERT = `
-attribute vec2 a_rest;
-attribute vec2 a_pos;
-attribute vec2 a_uv;
-attribute float a_weight;
-uniform vec2 u_res;
-uniform vec2 u_offset;
-uniform float u_time;
-uniform float u_breath;
-varying vec2 v_uv;
-varying vec2 v_rest;
+const VERT = `#version 300 es
+precision highp float;
+layout(location = 0) in vec2 aRest;
+
+uniform vec2 uSize;      // 图片显示尺寸（css px）
+uniform vec2 uOffset;    // 图片左上角（css px）
+uniform vec2 uCanvas;    // 画布尺寸（css px）
+uniform float uAspect;   // 图片宽高比
+uniform int uGrabCount;
+uniform vec4 uGrabA[${MAX_GRABS}];   // anchor.xy(iso) / radius / strength
+uniform vec2 uGrabPull[${MAX_GRABS}]; // pull.xy(iso)
+uniform float uBulge;
+uniform sampler2D uMask;
+uniform float uMaskEnabled;
+uniform vec2 uMaskCell;
+
+out vec2 vRest;
+
+// 中心平坦、边缘平滑收住的衰减
+float falloff(float t) {
+  float s = 1.0 - t;
+  return s * s * s * (6.0 * t * t + 3.0 * t + 1.0);
+}
+
+// 在 t=1/3 处最大的一圈：拉的时候周围往外鼓，做出体积感
+float ring(float t) {
+  return 6.75 * t * (1.0 - t) * (1.0 - t);
+}
+
+// 四 taps 平均，避免遮罩边界按顶点分辨率折成锯齿
+float maskAt(vec2 uv) {
+  vec2 h = uMaskCell * 0.5;
+  return 0.25 * (
+    textureLod(uMask, uv + vec2(-h.x, -h.y), 0.0).r +
+    textureLod(uMask, uv + vec2( h.x, -h.y), 0.0).r +
+    textureLod(uMask, uv + vec2(-h.x,  h.y), 0.0).r +
+    textureLod(uMask, uv + vec2( h.x,  h.y), 0.0).r
+  );
+}
 
 void main() {
-  vec2 p = a_pos + u_offset;
-  float b = sin(u_time * 1.15 + a_rest.x * 0.011 + a_rest.y * 0.014);
-  p.y += b * u_breath * a_weight;
-  vec2 clip = vec2(p.x / u_res.x * 2.0 - 1.0, 1.0 - p.y / u_res.y * 2.0);
+  vec2 iso = vec2(aRest.x * uAspect, aRest.y);
+  vec2 disp = vec2(0.0);
+  float wsum = 0.0;
+
+  for (int i = 0; i < ${MAX_GRABS}; i++) {
+    if (i >= uGrabCount) break;
+    float strength = uGrabA[i].w;
+    if (strength <= 0.0) continue;
+
+    vec2 rel = iso - uGrabA[i].xy;
+    float d = length(rel);
+    float t = clamp(d / max(uGrabA[i].z, 1e-4), 0.0, 1.0);
+    float w = falloff(t) * strength;
+    vec2 pull = uGrabPull[i];
+    vec2 dir = d > 1e-5 ? rel / d : vec2(0.0);
+
+    disp += w * pull + uBulge * length(pull) * ring(t) * dir * strength;
+    wsum += w;
+  }
+
+  float m = uMaskEnabled > 0.5 ? maskAt(aRest) : 1.0;
+  disp *= m / max(1.0, wsum);
+
+  vec2 px = uOffset + aRest * uSize + disp * uSize.y;
+  vec2 clip = vec2(px.x / uCanvas.x * 2.0 - 1.0, 1.0 - px.y / uCanvas.y * 2.0);
   gl_Position = vec4(clip, 0.0, 1.0);
-  v_uv = a_uv;
-  v_rest = a_rest;
+  vRest = aRest;
 }
 `;
 
-const FRAG = `
-precision mediump float;
-varying vec2 v_uv;
-varying vec2 v_rest;
-uniform sampler2D u_tex;
-uniform vec2 u_size;
-uniform float u_radius;
+const FRAG = `#version 300 es
+precision highp float;
+in vec2 vRest;
+
+uniform sampler2D uTex;
+uniform vec2 uSize;
+uniform float uRadius;
+
+out vec4 outColor;
 
 void main() {
-  vec2 halfSize = u_size * 0.5;
-  vec2 d = abs(v_rest - halfSize) - (halfSize - vec2(u_radius));
-  float sd = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - u_radius;
+  vec2 halfSize = uSize * 0.5;
+  vec2 p = vRest * uSize;
+  vec2 d = abs(p - halfSize) - (halfSize - vec2(uRadius));
+  float sd = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - uRadius;
   float alpha = 1.0 - smoothstep(-0.7, 0.7, sd);
   if (alpha <= 0.002) discard;
-  vec4 c = texture2D(u_tex, v_uv);
-  gl_FragColor = vec4(c.rgb, c.a * alpha);
+
+  vec4 c = texture(uTex, vRest);
+  outColor = vec4(c.rgb, c.a * alpha);
 }
 `;
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const len2 = (x, y) => Math.hypot(x, y);
 
-function compile(gl, type, source) {
-  const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const log = gl.getShaderInfoLog(shader);
-    gl.deleteShader(shader);
+function compile(gl, type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh);
+    gl.deleteShader(sh);
     throw new Error(`shader: ${log}`);
   }
-  return shader;
+  return sh;
 }
 
 export class SquishEngine {
   constructor(canvas) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl', {
+    const gl = canvas.getContext('webgl2', {
       alpha: true,
       antialias: true,
       premultipliedAlpha: false,
       preserveDrawingBuffer: true,
       powerPreference: 'high-performance',
     });
-    if (!gl) throw new Error('WebGL 不可用');
+    if (!gl) throw new Error('WebGL2 不可用');
     this.gl = gl;
 
     this.presetName = 'mochi';
-    this.preset = PRESETS.mochi;
+    this.params = { ...PRESETS.mochi };
     this.power = 1;
-    this.reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
+    this.reduced = false;
     this.image = null;
-    this.mask = null;
-    this.maskData = null;
-    this.breathOn = true;
     this.rect = { x: 0, y: 0, w: 0, h: 0 };
     this.cssW = 0;
     this.cssH = 0;
     this.dpr = 1;
+    this.aspect = 1;
+    this.grabs = [];
 
-    this.grabs = new Map();
-    this.time = 0;
-    this.acc = 0;
-    this.last = performance.now();
+    this.maskEnabled = false;
+    this.maskData = null;
+    this.maskW = 0;
+    this.maskH = 0;
+
+    this.grabA = new Float32Array(MAX_GRABS * 4);
+    this.grabPull = new Float32Array(MAX_GRABS * 2);
 
     this._program = this._createProgram();
-    this._loc = {
-      rest: gl.getAttribLocation(this._program, 'a_rest'),
-      pos: gl.getAttribLocation(this._program, 'a_pos'),
-      uv: gl.getAttribLocation(this._program, 'a_uv'),
-      weight: gl.getAttribLocation(this._program, 'a_weight'),
-      res: gl.getUniformLocation(this._program, 'u_res'),
-      offset: gl.getUniformLocation(this._program, 'u_offset'),
-      time: gl.getUniformLocation(this._program, 'u_time'),
-      breath: gl.getUniformLocation(this._program, 'u_breath'),
-      tex: gl.getUniformLocation(this._program, 'u_tex'),
-      size: gl.getUniformLocation(this._program, 'u_size'),
-      radius: gl.getUniformLocation(this._program, 'u_radius'),
-    };
+    this._u = {};
+    for (const name of [
+      'uSize', 'uOffset', 'uCanvas', 'uAspect', 'uGrabCount', 'uGrabA',
+      'uGrabPull', 'uBulge', 'uMask', 'uMaskEnabled', 'uMaskCell',
+      'uTex', 'uRadius',
+    ]) {
+      this._u[name] = gl.getUniformLocation(this._program, name);
+    }
 
-    this.staticBuf = gl.createBuffer();
-    this.posBuf = gl.createBuffer();
+    this.imageTex = this._createImageTexture();
+    this.maskTex = this._createMaskTexture();
+
+    this.vao = gl.createVertexArray();
+    this.meshBuf = gl.createBuffer();
     this.indexBuf = gl.createBuffer();
-    this.tex = gl.createTexture();
-
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
 
     this._onResize = this._onResize.bind(this);
     this._loop = this._loop.bind(this);
-    this._resizeObserver = new ResizeObserver(this._onResize);
-    this._resizeObserver.observe(canvas);
+    this._ro = new ResizeObserver(this._onResize);
+    this._ro.observe(canvas);
     this._resize();
 
+    this.last = performance.now();
     this.raf = requestAnimationFrame(this._loop);
   }
 
   _createProgram() {
     const gl = this.gl;
-    const program = gl.createProgram();
+    const p = gl.createProgram();
     const vs = compile(gl, gl.VERTEX_SHADER, VERT);
     const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG);
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      throw new Error(`program: ${gl.getProgramInfoLog(program)}`);
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
+    gl.linkProgram(p);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      throw new Error(`program: ${gl.getProgramInfoLog(p)}`);
     }
-    return program;
+    return p;
   }
 
-  // 屏幕尺寸变了：重算画布、照片位置和网格
+  _createImageTexture() {
+    const gl = this.gl;
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    return t;
+  }
+
+  _createMaskTexture() {
+    const gl = this.gl;
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([0]));
+    return t;
+  }
+
   _resize() {
     const cw = this.canvas.clientWidth || 1;
     const ch = this.canvas.clientHeight || 1;
@@ -165,23 +243,21 @@ export class SquishEngine {
     this.cssH = ch;
     this.dpr = dpr;
     this.gl.viewport(0, 0, bw, bh);
-    if (this.image) {
-      this._layout();
-      this._buildMesh();
-    }
+    if (this.image) this._layout();
   }
 
   _onResize() {
     clearTimeout(this._resizeTimer);
-    this._resizeTimer = setTimeout(() => this._resize(), 90);
+    this._resizeTimer = setTimeout(() => this._resize(), 80);
   }
 
   setImage(image) {
     this.image = image;
+    this.aspect = image.width / image.height;
     this._layout();
-    this._uploadTexture();
+    this._uploadImage();
     this._buildMesh();
-    this.grabs.clear();
+    this.reset();
   }
 
   _layout() {
@@ -195,54 +271,38 @@ export class SquishEngine {
     this.rect = { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
   }
 
-  _uploadTexture() {
+  _uploadImage() {
     const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    const img = this.image;
+    gl.bindTexture(gl.TEXTURE_2D, this.imageTex);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.image);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.generateMipmap(gl.TEXTURE_2D);
   }
 
   _buildMesh() {
     const gl = this.gl;
-    const { w, h } = this.rect;
-    const spacing = Math.max(11, Math.min(w, h) / 52);
-    const cols = clamp(Math.round(w / spacing) + 1, 14, 104);
-    const rows = clamp(Math.round(h / spacing) + 1, 14, 104);
+    const aspect = this.aspect;
+    let cols;
+    let rows;
+    if (aspect >= 1) {
+      cols = Math.min(MAX_SEGS, Math.round(SHORT_SEGS * aspect));
+      rows = SHORT_SEGS;
+    } else {
+      cols = SHORT_SEGS;
+      rows = Math.min(MAX_SEGS, Math.round(SHORT_SEGS / aspect));
+    }
     this.cols = cols;
     this.rows = rows;
 
-    const count = cols * rows;
-    this.rest = new Float32Array(count * 2);
-    this.uv = new Float32Array(count * 2);
-    this.pos = new Float32Array(count * 2);
-    this.vel = new Float32Array(count * 2);
-    this.weight = new Float32Array(count);
-
+    const verts = new Float32Array(cols * rows * 2);
     for (let j = 0; j < rows; j++) {
       for (let i = 0; i < cols; i++) {
         const idx = j * cols + i;
-        const x = (i / (cols - 1)) * w;
-        const y = (j / (rows - 1)) * h;
-        this.rest[idx * 2] = x;
-        this.rest[idx * 2 + 1] = y;
-        this.pos[idx * 2] = x;
-        this.pos[idx * 2 + 1] = y;
-        this.uv[idx * 2] = i / (cols - 1);
-        this.uv[idx * 2 + 1] = 1 - j / (rows - 1);
-        this.weight[idx] = 1;
+        verts[idx * 2] = i / (cols - 1);
+        verts[idx * 2 + 1] = j / (rows - 1);
       }
-    }
-
-    this._applyMaskWeights();
-
-    const statics = new Float32Array(count * 5);
-    for (let idx = 0; idx < count; idx++) {
-      statics[idx * 5] = this.rest[idx * 2];
-      statics[idx * 5 + 1] = this.rest[idx * 2 + 1];
-      statics[idx * 5 + 2] = this.uv[idx * 2];
-      statics[idx * 5 + 3] = this.uv[idx * 2 + 1];
-      statics[idx * 5 + 4] = this.weight[idx];
     }
 
     const indices = new Uint16Array((cols - 1) * (rows - 1) * 6);
@@ -263,306 +323,340 @@ export class SquishEngine {
     }
     this.indexCount = indices.length;
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.staticBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, statics, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, this.pos, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuf);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
 
     if (typeof this.onMesh === 'function') this.onMesh();
   }
 
   setMask(maskCanvas) {
-    this.mask = maskCanvas || null;
-    if (maskCanvas) {
-      const ctx = maskCanvas.getContext('2d', { willReadFrequently: true });
-      this.maskData = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-    } else {
-      this.maskData = null;
+    const gl = this.gl;
+    if (!maskCanvas) {
+      this.maskEnabled = false;
+      return;
     }
-    if (this.cols) {
-      this._applyMaskWeights();
-      this._syncWeights();
-    }
+    const scale = 512 / Math.max(maskCanvas.width, maskCanvas.height);
+    const mw = Math.max(2, Math.round(maskCanvas.width * scale));
+    const mh = Math.max(2, Math.round(maskCanvas.height * scale));
+    const c = document.createElement('canvas');
+    c.width = mw;
+    c.height = mh;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(maskCanvas, 0, 0, mw, mh);
+    const data = ctx.getImageData(0, 0, mw, mh).data;
+    const alpha = new Uint8Array(mw * mh);
+    for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3];
+
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, mw, mh, 0, gl.RED, gl.UNSIGNED_BYTE, alpha);
+
+    this.maskData = alpha;
+    this.maskW = mw;
+    this.maskH = mh;
+    this.maskEnabled = true;
     this.reset();
   }
 
-  _applyMaskWeights() {
-    if (!this.weight) return;
-    const { cols, rows, uv, weight } = this;
-    if (!this.maskData) {
-      weight.fill(1);
-      return;
+  maskAtUV(u, v) {
+    if (!this.maskEnabled || !this.maskData) return 1;
+    const x = clamp(u, 0, 1) * (this.maskW - 1);
+    const y = clamp(v, 0, 1) * (this.maskH - 1);
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const x1 = Math.min(this.maskW - 1, x0 + 1);
+    const y1 = Math.min(this.maskH - 1, y0 + 1);
+    const tx = x - x0;
+    const ty = y - y0;
+    const d = this.maskData;
+    const w = this.maskW;
+    const a =
+      d[y0 * w + x0] * (1 - tx) * (1 - ty) +
+      d[y0 * w + x1] * tx * (1 - ty) +
+      d[y1 * w + x0] * (1 - tx) * ty +
+      d[y1 * w + x1] * tx * ty;
+    return a / 255;
+  }
+
+  get S() {
+    return Math.min(1, this.aspect);
+  }
+
+  lmax() {
+    return Math.max(0.0001, this.params.stretch * this.params.radius * this.S * this.power);
+  }
+
+  radiusEff(g) {
+    const base = this.params.radius * this.S;
+    const pull = len2(g.pull.x, g.pull.y);
+    return base * (1 + 0.35 * Math.min(1, pull / this.lmax()));
+  }
+
+  strengthOf(g) {
+    return Math.min(1, (g.ease * 1000) / EASE_MS) * g.weight;
+  }
+
+  _dispAt(x, y) {
+    let dx = 0;
+    let dy = 0;
+    let wsum = 0;
+    const bulge = this.params.bulge;
+    for (const g of this.grabs) {
+      const s = this.strengthOf(g);
+      if (s <= 0) continue;
+      const rx = x - g.anchor.x;
+      const ry = y - g.anchor.y;
+      const d = len2(rx, ry);
+      const t = Math.min(1, d / this.radiusEff(g));
+      const w = (function (tt) {
+        const q = 1 - tt;
+        return q * q * q * (6 * tt * tt + 3 * tt + 1);
+      })(t) * s;
+      const pull = len2(g.pull.x, g.pull.y);
+      const ring = 6.75 * t * (1 - t) * (1 - t);
+      const dirX = d > 1e-5 ? rx / d : 0;
+      const dirY = d > 1e-5 ? ry / d : 0;
+      dx += w * g.pull.x + bulge * pull * ring * dirX * s;
+      dy += w * g.pull.y + bulge * pull * ring * dirY * s;
+      wsum += w;
     }
-    const { width: mw, height: mh, data } = this.maskData;
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        const idx = j * cols + i;
-        const fx = uv[idx * 2] * (mw - 1);
-        const fy = (1 - uv[idx * 2 + 1]) * (mh - 1);
-        const x0 = Math.floor(fx);
-        const y0 = Math.floor(fy);
-        const x1 = Math.min(mw - 1, x0 + 1);
-        const y1 = Math.min(mh - 1, y0 + 1);
-        const tx = fx - x0;
-        const ty = fy - y0;
-        const a =
-          data[(y0 * mw + x0) * 4 + 3] * (1 - tx) * (1 - ty) +
-          data[(y0 * mw + x1) * 4 + 3] * tx * (1 - ty) +
-          data[(y1 * mw + x0) * 4 + 3] * (1 - tx) * ty +
-          data[(y1 * mw + x1) * 4 + 3] * tx * ty;
-        weight[idx] = Math.min(1, a / 255);
-      }
+    const m = this.maskEnabled ? this.maskAtUV(x / this.aspect, y) : 1;
+    const c = m / Math.max(1, wsum);
+    return { x: dx * c, y: dy * c };
+  }
+
+  _invert(uv) {
+    let ix = uv.x;
+    let iy = uv.y;
+    for (let k = 0; k < 3; k++) {
+      const d = this._dispAt(ix * this.aspect, iy);
+      ix = uv.x - d.x / this.aspect;
+      iy = uv.y - d.y;
     }
+    return { x: ix * this.aspect, y: iy };
   }
 
-  _syncWeights() {
-    if (!this.staticBuf || !this.weight) return;
-    const gl = this.gl;
-    const statics = new Float32Array(this.weight.length * 5);
-    for (let idx = 0; idx < this.weight.length; idx++) {
-      statics[idx * 5] = this.rest[idx * 2];
-      statics[idx * 5 + 1] = this.rest[idx * 2 + 1];
-      statics[idx * 5 + 2] = this.uv[idx * 2];
-      statics[idx * 5 + 3] = this.uv[idx * 2 + 1];
-      statics[idx * 5 + 4] = this.weight[idx];
-    }
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.staticBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, statics, gl.STATIC_DRAW);
-  }
-
-  setBreathing(on) {
-    this.breathOn = Boolean(on);
-  }
-
-  setPreset(name) {
-    if (!PRESETS[name]) return;
-    this.presetName = name;
-    this.preset = PRESETS[name];
-  }
-
-  setPower(v) {
-    this.power = clamp(Number(v) || 1, 0.4, 1.6);
-  }
-
-  setReducedMotion(reduced) {
-    this.reduced = Boolean(reduced);
-  }
-
-  _localPoint(clientX, clientY) {
+  _clientToUV(clientX, clientY) {
     const r = this.canvas.getBoundingClientRect();
-    return { x: clientX - r.left, y: clientY - r.top };
+    return {
+      x: (clientX - r.left - this.rect.x) / this.rect.w,
+      y: (clientY - r.top - this.rect.y) / this.rect.h,
+    };
   }
 
   grab(id, clientX, clientY) {
-    if (!this.image) return;
-    const p = this._localPoint(clientX, clientY);
-    const t = performance.now();
-    this.grabs.set(id, { x0: p.x, y0: p.y, x: p.x, y: p.y, sx: p.x, sy: p.y, t0: t, moved: 0 });
+    if (!this.image) return false;
+    const uv = this._clientToUV(clientX, clientY);
+    if (uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1) return false;
+    const weight = this.maskEnabled ? this.maskAtUV(uv.x, uv.y) : 1;
+    if (weight < 0.05) return false;
+    if (this.grabs.length >= MAX_GRABS) {
+      const free = this.grabs.findIndex((g) => g.released);
+      if (free >= 0) this.grabs.splice(free, 1);
+      else this.grabs.shift();
+    }
+    const inv = this._invert(uv);
+    this.grabs.push({
+      id,
+      anchor: { x: inv.x, y: inv.y },
+      pointer: { x: uv.x * this.aspect, y: uv.y },
+      pull: { x: 0, y: 0 },
+      vel: { x: 0, y: 0 },
+      ease: 0,
+      weight,
+      released: false,
+      startX: clientX,
+      startY: clientY,
+      moved: 0,
+    });
+    return true;
   }
 
   move(id, clientX, clientY) {
-    const g = this.grabs.get(id);
+    const g = this.grabs.find((a) => a.id === id && !a.released);
     if (!g) return;
-    const p = this._localPoint(clientX, clientY);
-    g.moved = Math.max(g.moved, Math.hypot(p.x - g.sx, p.y - g.sy));
-    g.x = p.x;
-    g.y = p.y;
+    g.moved = Math.max(g.moved, len2(clientX - g.startX, clientY - g.startY));
+    const uv = this._clientToUV(clientX, clientY);
+    g.pointer.x = uv.x * this.aspect;
+    g.pointer.y = uv.y;
   }
 
   release(id) {
-    const g = this.grabs.get(id);
+    const g = this.grabs.find((a) => a.id === id && !a.released);
     if (!g) return { poked: false };
-    this.grabs.delete(id);
-    const quick = performance.now() - g.t0 < 320;
-    if (g.moved < 6 && quick) {
-      this.poke(g.x0, g.y0);
+    const tap = g.moved < 6 && g.ease < 0.35;
+    g.released = true;
+    if (tap) {
+      const cx = this.aspect * 0.5;
+      let dx = g.anchor.x - cx;
+      let dy = g.anchor.y - 0.5;
+      const d = len2(dx, dy);
+      if (d < 1e-4) {
+        dx = 0;
+        dy = -1;
+      } else {
+        dx /= d;
+        dy /= d;
+      }
+      const mag = 0.18 * this.lmax();
+      g.pull.x += dx * mag;
+      g.pull.y += dy * mag;
       return { poked: true };
     }
     return { poked: false };
   }
 
   poke(x, y) {
-    if (!this.pos) return;
-    const { cols, rows, rest, vel } = this;
-    const r = Math.min(this.rect.w, this.rect.h) * this.preset.radius * 0.92;
-    const r2 = r * r;
-    const kick = this.preset.kick * this.power;
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        const idx = j * cols + i;
-        const dx = rest[idx * 2] - x;
-        const dy = rest[idx * 2 + 1] - y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 > r2) continue;
-        const d = Math.sqrt(d2);
-        const w = (1 - d / r) * this.weight[idx];
-        const f = w * w * kick;
-        if (d < 0.001) {
-          vel[idx * 2] += f * 0.4;
-          continue;
-        }
-        vel[idx * 2] += (dx / d) * f;
-        vel[idx * 2 + 1] += (dy / d) * f;
-      }
-    }
+    const uv = { x: (x - this.rect.x) / this.rect.w, y: (y - this.rect.y) / this.rect.h };
+    if (uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1) return;
+    const weight = this.maskEnabled ? this.maskAtUV(uv.x, uv.y) : 1;
+    if (weight < 0.05) return;
+    const inv = this._invert(uv);
+    const dx = uv.x - 0.5;
+    const dy = uv.y - 0.5;
+    const d = len2(dx, dy) || 1;
+    const mag = 0.18 * this.lmax();
+    this.grabs.push({
+      id: `poke-${performance.now()}`,
+      anchor: { x: inv.x, y: inv.y },
+      pointer: { x: uv.x * this.aspect, y: uv.y },
+      pull: { x: (dx / d) * mag, y: (dy / d) * mag },
+      vel: { x: 0, y: 0 },
+      ease: 0.2,
+      weight,
+      released: true,
+      startX: 0,
+      startY: 0,
+      moved: 99,
+    });
   }
 
   reset() {
-    if (!this.pos) return;
-    const { rest, pos, vel } = this;
-    for (let i = 0; i < pos.length; i++) {
-      pos[i] = rest[i];
-      vel[i] = 0;
-    }
-    this.grabs.clear();
+    this.grabs.length = 0;
+    this.grabA.fill(0);
+    this.grabPull.fill(0);
   }
 
-  _step() {
-    const { cols, rows, rest, pos, vel } = this;
-    const { k, damp, spread } = this.preset;
-
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        const idx = j * cols + i;
-        const p = idx * 2;
-        const w = this.weight[idx];
-        if (w <= 0.015) {
-          pos[p] = rest[p];
-          pos[p + 1] = rest[p + 1];
-          vel[p] = 0;
-          vel[p + 1] = 0;
-          continue;
-        }
-        const px = pos[p];
-        const py = pos[p + 1];
-        const kk = k * (0.35 + 0.65 * w);
-
-        let ax = (rest[p] - px) * kk;
-        let ay = (rest[p + 1] - py) * kk;
-
-        if (spread > 0) {
-          const il = i > 0 ? idx - 1 : idx;
-          const ir = i < cols - 1 ? idx + 1 : idx;
-          const iu = j > 0 ? idx - cols : idx;
-          const id = j < rows - 1 ? idx + cols : idx;
-          const avgX = (pos[il * 2] + pos[ir * 2] + pos[iu * 2] + pos[id * 2]) * 0.25;
-          const avgY = (pos[il * 2 + 1] + pos[ir * 2 + 1] + pos[iu * 2 + 1] + pos[id * 2 + 1]) * 0.25;
-          ax += (avgX - px) * spread;
-          ay += (avgY - py) * spread;
-        }
-
-        let vx = (vel[p] + ax) * damp;
-        let vy = (vel[p + 1] + ay) * damp;
-        if (vx > 42) vx = 42;
-        else if (vx < -42) vx = -42;
-        if (vy > 42) vy = 42;
-        else if (vy < -42) vy = -42;
-
-        vel[p] = vx;
-        vel[p + 1] = vy;
-        pos[p] = px + vx;
-        pos[p + 1] = py + vy;
-      }
-    }
-
-    if (this.grabs.size) this._applyGrabs();
+  setPreset(name) {
+    if (!PRESETS[name]) return;
+    this.presetName = name;
+    this.params = { ...PRESETS[name] };
   }
 
-  _applyGrabs() {
-    const { cols, rows, rest, pos, vel } = this;
-    const base = Math.min(this.rect.w, this.rect.h);
-    const r = base * this.preset.radius;
+  setPower(v) {
+    this.power = clamp(Number(v) || 1, 0.4, 1.6);
+  }
 
-    for (const g of this.grabs.values()) {
-      const pullX = (g.x - g.x0) * this.power * this.preset.pull;
-      const pullY = (g.y - g.y0) * this.power * this.preset.pull;
-      // 受力范围钉在按下去的位置，而不是跟着手指跑，否则一拖出涂区就松手了
-      const cx = g.x0;
-      const cy = g.y0;
-      const r2 = r * r;
+  setBreathing() {
+    /* 这一版没有自动呼吸，只有手指带来的形变 */
+  }
 
-      for (let j = 0; j < rows; j++) {
-        for (let i = 0; i < cols; i++) {
-          const idx = j * cols + i;
-          const p = idx * 2;
-          const dx = rest[p] - cx;
-          const dy = rest[p + 1] - cy;
-          const d2 = dx * dx + dy * dy;
-          if (d2 > r2) continue;
-          const d = Math.sqrt(d2);
-          let w = 1 - d / r;
-          w = w * w * (3 - 2 * w) * this.weight[idx];
-          if (w <= 0.002) continue;
+  setReducedMotion(v) {
+    this.reduced = Boolean(v);
+  }
 
-          const tx = rest[p] + pullX * w;
-          const ty = rest[p + 1] + pullY * w;
-          const nx = pos[p] + (tx - pos[p]) * 0.62;
-          const ny = pos[p + 1] + (ty - pos[p + 1]) * 0.62;
+  _update(dt) {
+    if (!this.grabs.length) return;
+    const stepDt = Math.min(dt, MAX_DT);
+    const n = Math.max(1, Math.ceil(stepDt / SUBSTEP));
+    const h = stepDt / n;
+    const L = this.lmax();
 
-          let vx = (nx - pos[p]) * 0.95;
-          let vy = (ny - pos[p + 1]) * 0.95;
-          vel[p] = clamp(vx, -46, 46);
-          vel[p + 1] = clamp(vy, -46, 46);
-          pos[p] = nx;
-          pos[p + 1] = ny;
+    for (let i = this.grabs.length - 1; i >= 0; i--) {
+      const g = this.grabs[i];
+      g.ease += stepDt;
+
+      let tx = 0;
+      let ty = 0;
+      if (!g.released) {
+        const dx = g.pointer.x - g.anchor.x;
+        const dy = g.pointer.y - g.anchor.y;
+        const d = len2(dx, dy);
+        if (d > 1e-9) {
+          const mag = L * Math.tanh(d / L);
+          tx = (dx / d) * mag;
+          ty = (dy / d) * mag;
         }
       }
-    }
-  }
 
-  _loop(now) {
-    this.raf = requestAnimationFrame(this._loop);
-    const dt = Math.min(now - this.last, 64);
-    this.last = now;
-    this.time += dt / 1000;
+      const omega = g.released ? 2 * Math.PI * this.params.freq : 80;
+      const zeta = g.released ? this.params.zeta : 0.85;
+      const k = omega * omega;
+      const c = 2 * zeta * omega;
+      for (let s = 0; s < n; s++) {
+        const ax = k * (tx - g.pull.x) - c * g.vel.x;
+        const ay = k * (ty - g.pull.y) - c * g.vel.y;
+        g.vel.x += ax * h;
+        g.vel.y += ay * h;
+        g.pull.x += g.vel.x * h;
+        g.pull.y += g.vel.y * h;
+      }
 
-    this.acc = Math.min(this.acc + dt, 60);
-    let steps = 0;
-    while (this.acc >= 16.666 && steps < 3) {
-      this._step();
-      this.acc -= 16.666;
-      steps++;
+      if (
+        g.released &&
+        len2(g.pull.x, g.pull.y) < 0.001 * this.S &&
+        len2(g.vel.x, g.vel.y) < 0.01 * this.S
+      ) {
+        this.grabs.splice(i, 1);
+      }
     }
-    this._draw();
   }
 
   _draw() {
     const gl = this.gl;
-    const { w, h } = this.rect;
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    if (!this.image || !this.pos) return;
+    if (!this.image) return;
+
+    const count = Math.min(this.grabs.length, MAX_GRABS);
+    for (let i = 0; i < count; i++) {
+      const g = this.grabs[i];
+      this.grabA[i * 4] = g.anchor.x;
+      this.grabA[i * 4 + 1] = g.anchor.y;
+      this.grabA[i * 4 + 2] = this.radiusEff(g);
+      this.grabA[i * 4 + 3] = this.strengthOf(g);
+      this.grabPull[i * 2] = g.pull.x;
+      this.grabPull[i * 2 + 1] = g.pull.y;
+    }
 
     gl.useProgram(this._program);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.pos);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.staticBuf);
-    gl.enableVertexAttribArray(this._loc.rest);
-    gl.vertexAttribPointer(this._loc.rest, 2, gl.FLOAT, false, 20, 0);
-    gl.enableVertexAttribArray(this._loc.uv);
-    gl.vertexAttribPointer(this._loc.uv, 2, gl.FLOAT, false, 20, 8);
-    gl.enableVertexAttribArray(this._loc.weight);
-    gl.vertexAttribPointer(this._loc.weight, 1, gl.FLOAT, false, 20, 16);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
-    gl.enableVertexAttribArray(this._loc.pos);
-    gl.vertexAttribPointer(this._loc.pos, 2, gl.FLOAT, false, 0, 0);
-
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.uniform1i(this._loc.tex, 0);
-    gl.uniform2f(this._loc.res, this.cssW, this.cssH);
-    gl.uniform2f(this._loc.offset, this.rect.x, this.rect.y);
-    gl.uniform1f(this._loc.time, this.time);
-    gl.uniform1f(this._loc.breath, this.reduced || !this.breathOn ? 0 : 0.75);
-    gl.uniform2f(this._loc.size, w, h);
-    gl.uniform1f(this._loc.radius, Math.min(18, w / 2, h / 2));
+    gl.bindTexture(gl.TEXTURE_2D, this.imageTex);
+    gl.uniform1i(this._u.uTex, 0);
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuf);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTex);
+    gl.uniform1i(this._u.uMask, 1);
+
+    gl.uniform2f(this._u.uSize, this.rect.w, this.rect.h);
+    gl.uniform2f(this._u.uOffset, this.rect.x, this.rect.y);
+    gl.uniform2f(this._u.uCanvas, this.cssW, this.cssH);
+    gl.uniform1f(this._u.uAspect, this.aspect);
+    gl.uniform1i(this._u.uGrabCount, count);
+    gl.uniform4fv(this._u.uGrabA, this.grabA);
+    gl.uniform2fv(this._u.uGrabPull, this.grabPull);
+    gl.uniform1f(this._u.uBulge, this.params.bulge);
+    gl.uniform1f(this._u.uMaskEnabled, this.maskEnabled ? 1 : 0);
+    gl.uniform2f(this._u.uMaskCell, 1 / this.cols, 1 / this.rows);
+    gl.uniform1f(this._u.uRadius, Math.min(18, this.rect.w / 2, this.rect.h / 2));
+
+    gl.bindVertexArray(this.vao);
     gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(null);
+  }
+
+  _loop(now) {
+    this.raf = requestAnimationFrame(this._loop);
+    const dt = Math.min((now - this.last) / 1000, 0.064);
+    this.last = now;
+    this._update(dt);
+    this._draw();
   }
 
   get stats() {
@@ -571,6 +665,6 @@ export class SquishEngine {
 
   dispose() {
     cancelAnimationFrame(this.raf);
-    this._resizeObserver.disconnect();
+    this._ro.disconnect();
   }
 }

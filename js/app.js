@@ -177,7 +177,7 @@ const stagePoint = (p) => ({
 function sampleMask(g, w, h) {
   const s = w / 900;
   const cheek = (cx, cy) => {
-    const r = 132 * s;
+    const r = 98 * s;
     g.save();
     g.translate(cx * s, cy * s);
     g.scale(1, 0.84);
@@ -191,8 +191,8 @@ function sampleMask(g, w, h) {
     g.fill();
     g.restore();
   };
-  cheek(286, 545);
-  cheek(614, 545);
+  cheek(286, 560);
+  cheek(614, 560);
 }
 
 function setupMask(img, { sample = false } = {}) {
@@ -210,7 +210,7 @@ function setupMask(img, { sample = false } = {}) {
   if (sample) {
     sampleMask(mask.ctx, mask.w, mask.h);
     mask.base = cloneCanvas(mask.canvas);
-    mask.spotMask = { x: 614 * (mask.w / 900), y: 545 * (mask.h / 900) };
+    mask.spotMask = { x: 614 * (mask.w / 900), y: 560 * (mask.h / 900) };
   }
 
   engine.setMask(mask.canvas);
@@ -564,8 +564,8 @@ async function startRecord() {
   try {
     const result = await recorder.start({
       duration: 4000,
-      fps: 12,
-      maxEdge: 440,
+      fps: 20,
+      maxEdge: 480,
       background: mat || '#F7FCFF',
     });
     showTake(result);
@@ -934,7 +934,8 @@ function fatal(message) {
   try {
     engine = new SquishEngine(el.canvas);
   } catch (err) {
-    fatal('照片揉捏需要 WebGL，开一下硬件加速再回来。');
+    console.error('engine init failed', err);
+    fatal('照片揉捏需要 WebGL2，开一下硬件加速再回来。');
     return;
   }
   await hero();
